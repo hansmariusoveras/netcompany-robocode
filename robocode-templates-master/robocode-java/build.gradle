@@ -1,0 +1,92 @@
+import org.gradle.internal.os.OperatingSystem
+
+plugins {
+    id 'java'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation "net.sf.robocode:robocode.api:1.9.4.3"
+}
+
+
+ext.robots = {
+    if (OperatingSystem.current().isWindows()) {
+       "C:/robocode/robots"
+    } else {
+       System.properties['user.home'] + "/robocode/robots"
+    }
+}()
+
+ext.metadata = {
+    try {
+        sourceSets.main.java.asFileTree.findAll { it.text =~ /extends (Advanced)?Robot/ }.collect {
+            def pkg = (it.text =~ /package (.*);/)[0][1]
+            def name = (it.text =~ /class (.*) extends (Advanced)?Robot/)[0][1]
+            return [pkg: pkg, name: name, clazz: "${pkg}.${name}"]
+        }
+        .first()
+    } catch (Exception e) {
+        println """
+            ERROR!
+            - Could not find a Robot with valid package and class definition.
+            - There should be a class extending Robot or AdvancedRobot with a valid package declaration.
+
+            package example;
+
+            import robocode.Robot;
+
+            public class ExampleRobot extends Robot {
+                @Override
+                public void run() {
+
+                }
+            }
+        """.stripIndent().trim()
+    }
+}()
+
+task generateProperties {
+    dependsOn processResources
+
+    doLast {
+        def propsFile = new File("${sourceSets.main.output.resourcesDir}/${"${metadata.pkg}.${metadata.name}".replace(".", "/")}.properties")
+        propsFile.parentFile.mkdirs()
+        propsFile.text = """
+            robot.author.name=${metadata.pkg}
+            robot.description=${metadata.name}
+            robot.classname=${metadata.clazz}
+            robocode.version=1.9.2.1
+        """.stripIndent().trim()
+    }
+}
+
+jar {
+    dependsOn generateProperties
+
+    baseName = metadata.clazz
+
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    manifest {
+        attributes "robots": metadata.clazz
+    }
+
+    from {
+        configurations.compileClasspath
+                .findAll { !it.path.contains("robocode.api") }
+                .collect { it.isDirectory() ? it : zipTree(it) }
+    }
+}
+
+task export(type: Copy) {
+    from jar
+    into file(robots)
+    doLast {
+        println("Exported ${robots}/${jar.baseName}.jar")
+    }
+}
+
